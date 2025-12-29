@@ -1,48 +1,73 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
-from model import predict_flower
-import os
+from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
+import torch
+import clip
+import io
 
-app = FastAPI(title="Flower Detection API")
+# -------------------------------
+# APP SETUP
+# -------------------------------
+app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# -------------------------------
+# MODEL SETUP (CLIP)
+# -------------------------------
+FLOWER_CLASSES = ["daisy", "dandelion", "rose", "sunflower", "tulip"]
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model, preprocess = clip.load("ViT-B/32", device=device)
+model.eval()
+
+text_prompts = [f"a photo of a {name}" for name in FLOWER_CLASSES]
+text_tokens = clip.tokenize(text_prompts).to(device)
+
+# -------------------------------
+# PREDICTION FUNCTION
+# -------------------------------
+def predict_flower(image: Image.Image):
+    img_input = preprocess(image).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        img_feat = model.encode_image(img_input)
+        txt_feat = model.encode_text(text_tokens)
+
+        img_feat /= img_feat.norm(dim=-1, keepdim=True)
+        txt_feat /= txt_feat.norm(dim=-1, keepdim=True)
+
+        logits = 100.0 * img_feat @ txt_feat.T
+        probs = logits.softmax(dim=-1).cpu().numpy()[0]
+
+    best_idx = probs.argmax()
+    return FLOWER_CLASSES[best_idx], probs
+
+# -------------------------------
+# API ENDPOINT
+# -------------------------------
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    try:
-        # Check uploaded file type
-        if not file.content_type.startswith("image/"):
-            raise HTTPException(status_code=400, detail="Please upload an image")
+    image_bytes = await file.read()
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-        # Save uploaded image temporarily
-        temp_path = "temp_image.jpg"
-        with open(temp_path, "wb") as f:
-            f.write(await file.read())
+    label, probs = predict_flower(image)
+    confidence = float(max(probs))
 
-        # Run the prediction
-        predicted_class, probs = predict_flower(temp_path)
-
-        # Remove temporary image
-        os.remove(temp_path)
-
-        # Prepare readable probability output
-        probability_dict = {
-            "daisy": float(probs[0]),
-            "dandelion": float(probs[1]),
-            "rose": float(probs[2]),
-            "sunflower": float(probs[3]),
-            "tulip": float(probs[4])
+    if confidence < 0.75:
+        return {
+            "predicted_class": "Unknown Flower",
+            "confidence": confidence
         }
 
-        # Return JSON response
-        return JSONResponse({
-            "predicted_class": predicted_class,
-            "all_probabilities": probability_dict
-        })
+    return {
+        "predicted_class": label,
+        "confidence": confidence
+    }
 
-    except Exception as e:
-        # Return the exact error message for debugging
-        return JSONResponse({"error": str(e)})
-        
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
