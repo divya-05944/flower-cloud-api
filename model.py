@@ -3,6 +3,7 @@ import clip
 from PIL import Image
 
 FLOWER_CLASSES = ["daisy", "dandelion", "rose", "sunflower", "tulip"]
+CONFIDENCE_THRESHOLD = 0.60   # ⭐ VERY IMPORTANT
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model, preprocess = clip.load("ViT-B/32", device=device)
@@ -26,4 +27,11 @@ def predict_flower(image_path):
         probs = logits.softmax(dim=-1).cpu().numpy()[0]
 
     best_idx = probs.argmax()
-    return FLOWER_CLASSES[best_idx], probs
+    confidence = float(probs[best_idx])
+
+    # ✅ UNKNOWN FLOWER LOGIC
+    if confidence < CONFIDENCE_THRESHOLD:
+        return "Unknown Flower", confidence
+
+    return FLOWER_CLASSES[best_idx], confidence
+
