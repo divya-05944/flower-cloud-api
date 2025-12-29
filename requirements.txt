@@ -1,9 +1,8 @@
 fastapi
-uvicorn[standard]
+uvicorn
 torch
-ftfy
-regex
-tqdm
-Pillow
-python-multipart
+torchvision
 git+https://github.com/openai/CLIP.git
+pillow
+python-multipart
+
